@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pro MD Editor - Web</title>
+<style>
+:root {
+  --bg: #f0f0f0; --fg: #000; --editor-bg: #fff; --editor-fg: #000;
+  --toolbar-bg: #e0e0e0; --border: #ccc; --btn-bg: #fff; --btn-hover: #d0d0d0;
+  --dialog-bg: #fff; --preview-bg: #f8f8f8;
+}
+[data-theme="dark"] {
+  --bg: #2b2b2b; --fg: #fff; --editor-bg: #1e1e1e; --editor-fg: #d4d4d4;
+  --toolbar-bg: #333; --border: #555; --btn-bg: #444; --btn-hover: #555;
+  --dialog-bg: #2b2b2b; --preview-bg: #1a1a1a;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--fg);
+  height: 100vh; display: flex; flex-direction: column;
+}
+.toolbar {
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px;
+  background: var(--toolbar-bg); border-bottom: 1px solid var(--border); align-items: center;
+}
+.toolbar button {
+  padding: 6px 14px; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--btn-bg); color: var(--fg); cursor: pointer; font-size: 13px;
+}
+.toolbar button:hover { background: var(--btn-hover); }
+.toolbar label { font-size: 13px; margin-left: 8px; }
+.toolbar input[type="range"] { width: 100px; vertical-align: middle; }
+.info-bar {
+  font-size: 11px; padding: 4px 12px; background: var(--toolbar-bg);
+  border-bottom: 1px solid var(--border); opacity: 0.8;
+}
+#editor {
+  flex: 1; width: 100%; border: none; outline: none; resize: none;
+  padding: 16px 20px; font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 14px; background: var(--editor-bg); color: var(--editor-fg);
+  line-height: 1.6; tab-size: 4;
+}
+/* 링크 다이얼로그 */
+.overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+  z-index: 100; justify-content: center; align-items: center;
+}
+.overlay.active { display: flex; }
+.dialog {
+  background: var(--dialog-bg); color: var(--fg); border-radius: 8px;
+  padding: 24px; min-width: 460px; max-width: 90vw; box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+}
+.dialog h3 { margin-bottom: 16px; font-size: 18px; }
+.form-row { display: flex; align-items: center; margin-bottom: 12px; }
+.form-row label { width: 80px; font-size: 13px; flex-shrink: 0; }
+.form-row input, .form-row select {
+  flex: 1; padding: 7px 10px; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--editor-bg); color: var(--fg); font-size: 13px;
+}
+.preview-box {
+  background: var(--preview-bg); padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 4px; font-family: Consolas, monospace; font-size: 13px;
+  word-break: break-all; margin: 8px 0 16px; min-height: 36px;
+}
+.dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+.dialog-buttons button {
+  padding: 8px 20px; border: 1px solid var(--border); border-radius: 4px;
+  cursor: pointer; font-size: 13px; background: var(--btn-bg); color: var(--fg);
+}
+.dialog-buttons button.primary {
+  background: #0078d4; color: #fff; border-color: #0078d4;
+}
+.dialog-buttons button.primary:hover { background: #106ebe; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <button onclick="loadFile()">불러오기 (Ctrl+O)</button>
+  <button onclick="saveFile()">저장 (Ctrl+S)</button>
+  <button onclick="insertListMarker()">리스트 삽입 (Ctrl+L)</button>
+  <button onclick="openLinkDialog()">링크 삽입 (Ctrl+K)</button>
+  <button onclick="toggleTheme()">테마 반전</button>
+  <label>글꼴 크기: <input type="range" id="fontSize" min="10" max="40" value="14"></label>
+  <span id="fontSizeVal" style="font-size:12px;margin-left:4px;">14px</span>
+</div>
+<div class="info-bar">
+  Enter: 다음 번호 자동생성 | Tab: 하위 레벨 | Shift+Tab: 상위 레벨 | Ctrl+K: 링크 삽입 | 빈 마커에서 Enter: 리스트 종료
+</div>
+<textarea id="editor" spellcheck="false"></textarea>
+
+<!-- 링크 삽입 다이얼로그 -->
+<div class="overlay" id="linkOverlay">
+<div class="dialog">
+  <h3>링크 삽입</h3>
+  <div class="form-row">
+    <label>링크 유형:</label>
+    <select id="linkType" onchange="onLinkTypeChange()">
+      <option value="0">일반 링크 [text](url)</option>
+      <option value="1">이미지 ![alt](url)</option>
+      <option value="2">참조 링크 [text][id]</option>
+    </select>
+  </div>
+  <div class="form-row">
+    <label>텍스트:</label>
+    <input id="linkText" placeholder="표시할 텍스트" oninput="updateLinkPreview()">
+  </div>
+  <div class="form-row">
+    <label>URL:</label>
+    <input id="linkUrl" placeholder="https://example.com" oninput="updateLinkPreview()">
+  </div>
+  <div class="form-row hidden" id="refIdRow">
+    <label>참조 ID:</label>
+    <input id="linkRefId" placeholder="참조 ID (예: 1, link1)" oninput="updateLinkPreview()">
+  </div>
+  <div class="form-row">
+    <label>툴팁:</label>
+    <input id="linkTitle" placeholder="마우스 오버 시 표시 (선택사항)" oninput="updateLinkPreview()">
+  </div>
+  <div class="form-row"><label>미리보기:</label></div>
+  <div class="preview-box" id="linkPreview"></div>
+  <div class="dialog-buttons">
+    <button onclick="closeLinkDialog()">취소</button>
+    <button class="primary" onclick="confirmLink()">삽입</button>
+  </div>
+</div>
+</div>
+
+<input type="file" id="fileInput" accept=".md,.txt" style="display:none">
+
+<script>
+// ─── 12단계 리스트 마커 정의 ───
+const LEVEL_DEFS = [
+  { pre: "",  type: "num",   suf: "."  }, // 1.
+  { pre: "",  type: "ko",    suf: "."  }, // 가.
+  { pre: "(", type: "num",   suf: ")"  }, // (1)
+  { pre: "(", type: "ko",    suf: ")"  }, // (가)
+  { pre: "",  type: "num",   suf: ")"  }, // 1)
+  { pre: "",  type: "ko",    suf: ")"  }, // 가)
+  { pre: "",  type: "upper", suf: "."  }, // A.
+  { pre: "",  type: "lower", suf: "."  }, // a.
+  { pre: "(", type: "upper", suf: ")"  }, // (A)
+  { pre: "(", type: "lower", suf: ")"  }, // (a)
+  { pre: "",  type: "upper", suf: ")"  }, // A)
+  { pre: "",  type: "lower", suf: ")"  }, // a)
+];
+const KO = "가나다라마바사아자차카타파하".split("");
+const INDENT = "    ";
+
+function seqChar(type, idx) {
+  if (type === "num") return String(idx + 1);
+  if (type === "ko") return KO[idx % KO.length];
+  if (type === "upper") return String.fromCharCode(65 + idx % 26);
+  if (type === "lower") return String.fromCharCode(97 + idx % 26);
+  return String(idx + 1);
+}
+
+function makeMarker(level, seqIdx) {
+  level = Math.max(0, Math.min(level, LEVEL_DEFS.length - 1));
+  const d = LEVEL_DEFS[level];
+  return d.pre + seqChar(d.type, seqIdx) + d.suf;
+}
+
+function escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+function buildPattern(def) {
+  const pre = escRe(def.pre), suf = escRe(def.suf);
+  let core;
+  if (def.type === "num") core = "(\\d+)";
+  else if (def.type === "ko") core = "([가나다라마바사아자차카타파하])";
+  else if (def.type === "upper") core = "([A-Z])";
+  else core = "([a-z])";
+  return new RegExp("^" + pre + core + suf);
+}
+
+function parseSeq(ch, type) {
+  if (type === "num") return parseInt(ch) - 1;
+  if (type === "ko") { const i = KO.indexOf(ch); return i >= 0 ? i : 0; }
+  if (type === "upper") return ch.charCodeAt(0) - 65;
+  if (type === "lower") return ch.charCodeAt(0) - 97;
+  return 0;
+}
+
+function parseMarker(line) {
+  const stripped = line.replace(/^( *)/, "");
+  const spaces = line.length - stripped.length;
+  for (let lvl = 0; lvl < LEVEL_DEFS.length; lvl++) {
+    const def = LEVEL_DEFS[lvl];
+    const re = buildPattern(def);
+    const m = stripped.match(re);
+    if (m) {
+      const markerText = m[0];
+      const seqIdx = parseSeq(m[1], def.type);
+      let rest = stripped.slice(markerText.length);
+      if (rest.startsWith(" ")) rest = rest.slice(1);
+      return { level: lvl, seqIdx, marker: markerText, rest, spaces };
+    }
+  }
+  return null;
+}
+
+// ─── 에디터 핵심 로직 ───
+const editor = document.getElementById("editor");
+
+function getLineInfo(ta) {
+  const val = ta.value;
+  const pos = ta.selectionStart;
+  const lineStart = val.lastIndexOf("\n", pos - 1) + 1;
+  let lineEnd = val.indexOf("\n", pos);
+  if (lineEnd === -1) lineEnd = val.length;
+  const line = val.slice(lineStart, lineEnd);
+  return { val, pos, lineStart, lineEnd, line };
+}
+
+editor.addEventListener("keydown", function(e) {
+  // ─── Tab ───
+  if (e.key === "Tab" && !e.shiftKey) {
+    e.preventDefault();
+    changeIndent(true);
+    return;
+  }
+  // ─── Shift+Tab ───
+  if (e.key === "Tab" && e.shiftKey) {
+    e.preventDefault();
+    changeIndent(false);
+    return;
+  }
+  // ─── Enter ───
+  if (e.key === "Enter") {
+    const { val, pos, lineStart, lineEnd, line } = getLineInfo(this);
+    const parsed = parseMarker(line);
+    if (parsed) {
+      e.preventDefault();
+      if (!parsed.rest.trim()) {
+        // 빈 마커 → 제거
+        this.value = val.slice(0, lineStart) + val.slice(lineEnd);
+        this.selectionStart = this.selectionEnd = lineStart;
+        // 새 줄 추가
+        document.execCommand("insertText", false, "\n");
+      } else {
+        // 다음 번호 생성
+        const next = makeMarker(parsed.level, parsed.seqIdx + 1);
+        const indent = " ".repeat(parsed.spaces);
+        const insert = "\n" + indent + next + " ";
+        // 커서를 줄 끝으로
+        this.selectionStart = this.selectionEnd = lineEnd;
+        document.execCommand("insertText", false, insert);
+      }
+      return;
+    }
+  }
+});
+
+function changeIndent(increase) {
+  const { val, pos, lineStart, lineEnd, line } = getLineInfo(editor);
+  const parsed = parseMarker(line);
+
+  if (parsed) {
+    let newLevel = increase ? parsed.level + 1 : parsed.level - 1;
+    newLevel = Math.max(0, Math.min(newLevel, LEVEL_DEFS.length - 1));
+    const newSpaces = increase
+      ? parsed.spaces + INDENT.length
+      : Math.max(0, parsed.spaces - INDENT.length);
+    const newMarker = makeMarker(newLevel, 0);
+    const newLine = " ".repeat(newSpaces) + newMarker + " " + parsed.rest;
+    editor.selectionStart = lineStart;
+    editor.selectionEnd = lineEnd;
+    document.execCommand("insertText", false, newLine);
+  } else {
+    if (increase) {
+      editor.selectionStart = lineStart;
+      editor.selectionEnd = lineStart;
+      document.execCommand("insertText", false, INDENT);
+    } else {
+      if (line.startsWith(INDENT)) {
+        editor.selectionStart = lineStart;
+        editor.selectionEnd = lineStart + INDENT.length;
+        document.execCommand("insertText", false, "");
+      }
+    }
+  }
+}
+
+// ─── 리스트 마커 삽입 ───
+function insertListMarker() {
+  editor.focus();
+  document.execCommand("insertText", false, "1. ");
+}
+
+// ─── 링크 다이얼로그 ───
+function openLinkDialog() {
+  const sel = editor.value.substring(editor.selectionStart, editor.selectionEnd);
+  document.getElementById("linkText").value = sel;
+  document.getElementById("linkUrl").value = "";
+  document.getElementById("linkTitle").value = "";
+  document.getElementById("linkRefId").value = "";
+  document.getElementById("linkType").value = "0";
+  onLinkTypeChange();
+  updateLinkPreview();
+  document.getElementById("linkOverlay").classList.add("active");
+  document.getElementById("linkUrl").focus();
+}
+
+function closeLinkDialog() {
+  document.getElementById("linkOverlay").classList.remove("active");
+  editor.focus();
+}
+
+function onLinkTypeChange() {
+  const t = document.getElementById("linkType").value;
+  document.getElementById("refIdRow").classList.toggle("hidden", t !== "2");
+  updateLinkPreview();
+}
+
+function getLinkMarkdown() {
+  const text = document.getElementById("linkText").value || "링크텍스트";
+  const url = document.getElementById("linkUrl").value || "url";
+  const title = document.getElementById("linkTitle").value;
+  const type = document.getElementById("linkType").value;
+  const titlePart = title ? ` "${title}"` : "";
+
+  if (type === "0") return `[${text}](${url}${titlePart})`;
+  if (type === "1") return `![${text}](${url}${titlePart})`;
+  const refId = document.getElementById("linkRefId").value || "1";
+  return `[${text}][${refId}]\n\n[${refId}]: ${url}${titlePart}`;
+}
+
+function updateLinkPreview() {
+  document.getElementById("linkPreview").textContent = getLinkMarkdown();
+}
+
+function confirmLink() {
+  const md = getLinkMarkdown();
+  closeLinkDialog();
+  editor.focus();
+  document.execCommand("insertText", false, md);
+}
+
+// ESC로 다이얼로그 닫기
+document.addEventListener("keydown", function(e) {
+  if (e.key === "Escape") closeLinkDialog();
+});
+
+// ─── 테마 ───
+function toggleTheme() {
+  const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+  document.documentElement.setAttribute("data-theme", isDark ? "light" : "dark");
+}
+
+// ─── 글꼴 크기 ───
+document.getElementById("fontSize").addEventListener("input", function() {
+  editor.style.fontSize = this.value + "px";
+  document.getElementById("fontSizeVal").textContent = this.value + "px";
+});
+
+// ─── 파일 저장/불러오기 ───
+function saveFile() {
+  const blob = new Blob([editor.value], { type: "text/markdown" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "document.md";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function loadFile() {
+  document.getElementById("fileInput").click();
+}
+document.getElementById("fileInput").addEventListener("change", function(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(ev) { editor.value = ev.target.result; };
+  reader.readAsText(file);
+  this.value = "";
+});
+
+// ─── 글로벌 단축키 ───
+document.addEventListener("keydown", function(e) {
+  if (e.ctrlKey && e.key === "s") { e.preventDefault(); saveFile(); }
+  if (e.ctrlKey && e.key === "o") { e.preventDefault(); loadFile(); }
+  if (e.ctrlKey && e.key === "l") { e.preventDefault(); insertListMarker(); }
+  if (e.ctrlKey && e.key === "k") { e.preventDefault(); openLinkDialog(); }
+});
+</script>
+</body>
+</html>
